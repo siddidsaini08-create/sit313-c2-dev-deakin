@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // Client registration / first Google sign-in: a new member starts on Free.
+      allow create: if isOwner(userId)
+                    && request.resource.data.keys().hasOnly([
+                      'uid', 'firstName', 'lastName', 'fullName', 'email',
+                      'plan', 'createdAt', 'updatedAt'
+                    ])
+                    && request.resource.data.uid == userId
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.plan == 'Free';
+
+      allow read: if isOwner(userId);
+
+      // One-time migration of pre-D1 P5 profiles with no plan field.
+      // Crucially, the browser can NEVER change Free -> Paid.
+      // Only the verified Express + Firebase Admin endpoint can do that.
+      allow update: if isOwner(userId)
+                    && !('plan' in resource.data)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                      .hasOnly(['plan', 'updatedAt'])
+                    && request.resource.data.plan == 'Free';
+
+      allow delete: if false;
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly([
+                      'authorId', 'authorName', 'title', 'body', 'createdAt'
+                    ])
+                    && request.resource.data.keys().hasAll([
+                      'authorId', 'authorName', 'title', 'body', 'createdAt'
+                    ])
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.authorName is string
+                    && request.resource.data.authorName.size() <= 80
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() >= 3
+                    && request.resource.data.title.size() <= 100
+                    && request.resource.data.body is string
+                    && request.resource.data.body.size() >= 10
+                    && request.resource.data.body.size() <= 2000
+                    && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}
